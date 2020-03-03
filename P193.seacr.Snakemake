@@ -63,20 +63,17 @@ rule seacr_run:
 		IgG = '{project}/{organism}/{mapper}/seacr/IgG_{PATTERN}.bedgraph',
 	output:
 		bed1 = '{project}/{organism}/{mapper}/seacr/{PATTERN}.auc.threshold.bed',
-		bed2 = '{project}/{organism}/{mapper}/seacr/{PATTERN}.norm.stringent.bed'
-	params:
-		stringent = 'stringent_',
-		relaxed = 'relaxed_',
-		AUC =  'Top1_',
+		bed2 = '{project}/{organism}/{mapper}/seacr/{PATTERN}.norm.stringent.bed',
+		bed3 = '{project}/{organism}/{mapper}/seacr/{PATTERN}.norm.relaxed.bed',
 	shell:
 		'''
-		bash /fs/home/yeroslaviz/SEACR/SEACR_1.3.sh {input.IP} 0.01 non stringent {output.bed1}
-		bash /fs/home/yeroslaviz/SEACR/SEACR_1.3.sh {input.IP} {input.IgG} norm stringent {output.bed2}
+		bash /fs/home/yeroslaviz/SEACR/SEACR_1.3.sh {input.IP} 0.01 non stringent output.bed1
+		bash /fs/home/yeroslaviz/SEACR/SEACR_1.3.sh {input.IP} {input.IgG} norm stringent output.bed2
+		bash /fs/home/yeroslaviz/SEACR/SEACR_1.3.sh {input.IP} {input.IgG} non relaxed output.bed3
+		mv output.bed1.stringent.bed {output.bed1}
+		mv output.bed2.stringent.bed {output.bed2}
+		mv output.bed3.relaxed.bed {output.bed3}
 		'''
-
-#		bash ~/SEACR/SEACR_1.3.sh {input.IP} {Input.IgG} norm stringent {params.stringent}{output.bed}
-#		bash ~/SEACR/SEACR_1.3.sh {input.IP} {Input.IgG} non relaxed {params.relaxed}{output.bed}
-
 
 rule seacr_prepare:
 	input:
