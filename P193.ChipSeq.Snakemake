@@ -1,0 +1,314 @@
+
+####################### Working directory! ########################
+#                 Whe nrunnning this script          		  #
+#          make sure that you're in the right folder  		  #
+# '/fs/pool/pool-bcfngs/fastq_files/PXXX/ProjectNAME/conc.fastq'  #
+###################################################################
+#To fit the analysis i have renamed the files
+#  mv WK1-H3K4me3.conc.R1.fastq.gz  IP_H3K4m3.conc.R1.fastq.gz
+#  mv WK1-H3K4me3.conc.R2.fastq.gz  IP_H3K4m3.conc.R2.fastq.gz
+#  mv WK2-IgG.conc.R1.fastq.gz IgG_H3K4m3.conc.R1.fastq.gz
+#  mv WK2-IgG.conc.R2.fastq.gz IgG_H3K4m3.conc.R2.fastq.gz
+##################################################################
+# This would make the pattern in the analysis 'H3K4m3';
+# the control files are the one with the 'IgG_' at the beginning and the Ipped samples have 'IP_'.
+
+# the mpping file for either paired-end or songle-end mapping step using the STAR aligner.
+############
+configfile:'/fs/pool/pool-bcfngs/scripts/P193.chipseq.config.yaml' # this is the path to the config file on the hpcl5002
+
+path=config['path']
+print('Directory of raw fastq reads:')
+print(path)
+
+# testing for reading in a list pf files from a specific folder:
+IDS, = glob_wildcards('{sample}.conc.R1.fastq.gz')
+
+PATTERN = ['H3K4m3']
+
+print('Sample list:')
+print(IDS)
+
+project=config['project']
+organism=config['org']
+mapper = config['mapper']
+print('Project Number is:' ,project)
+print('Mapping against genome', organism)
+print('Mapper used is ', mapper)
+
+rule all:
+    input:
+##        expand('{project}/{organism}/bowtie2/{sample}.sorted.bam', sample = IDS, organism = config['org'], project = config['project']),
+##        expand('{project}/{organism}/bwa/{sample}.sorted.bam', sample = IDS, organism = config['org'], project = config['project']),
+##        expand('{project}/{organism}/segemehl/{sample}.sorted.bam', sample = IDS, organism = config['org'], project = config['project']),
+##        expand('{project}/{organism}/bowtie2/{sample}.bam.bai', sample = IDS, organism = config['org'], project = config['project']),
+##        expand('{project}/{organism}/bwa/{sample}.bam.bai', sample = IDS, organism = config['org'], project = config['project']),
+##        expand('{project}/{organism}/segemehl/{sample}.bam.bai', sample = IDS, organism = config['org'], project = config['project']),
+## Mapping, sorting, indexing, removing duplicatios
+        expand('{project}/{organism}/{mapper}/{sample}.sorted.bam', sample = IDS, organism = config['org'], project = config['project'], mapper = config['mapper']),         # mapper results
+        expand('{project}/{organism}/{mapper}/{sample}.rmdup.bam', sample = IDS, organism = config['org'], project = config['project'], mapper = config['mapper']),          # removing duplicated reads
+        expand('{project}/{organism}/{mapper}/{sample}.rmdup.bam.bai', sample = IDS, organism = config['org'], project = config['project'], mapper = config['mapper']),      # indexing bam files
+        expand('{project}/{organism}/{mapper}/{sample}.rmdup.bam.flagstat', sample = IDS, organism = config['org'], project = config['project'], mapper = config['mapper']), # summary statistics of the mapped files
+### bam coverage
+        expand('{project}/{organism}/{mapper}/bamCoverage/{sample}.rmdup.bdg', sample = IDS, organism = config['org'], project = config['project'], mapper = config['mapper']), # convert bam to bedGraph
+## MACS2
+        expand('{project}/{organism}/{mapper}/macs2/{pattern}_peaks.narrowPeak', pattern = PATTERN, organism = config['org'], project = config['project'], mapper = config['mapper']),   # macs2 run to calculate peaks (narrows and broad) 
+        expand('{project}/{organism}/{mapper}/macs2/{pattern}.compared.bdg', pattern = PATTERN, organism = config['org'], project = config['project'], mapper = config['mapper']),       # compare the two bedGraph files
+        expand('{project}/{organism}/{mapper}/macs2/{pattern}_treat_pileup.bw', pattern = PATTERN, organism = config['org'], project = config['project'], mapper = config['mapper']),    # convert bedGraph to bigWig
+## Homer
+        expand('{project}/{organism}/{mapper}/homer/Tags/{sample}', sample = IDS, organism = config['org'], project = config['project'], mapper = config['mapper']),                     # homer create tag directory
+        expand('{project}/{organism}/{mapper}/homer/Tags/{sample}.bigwig', sample = IDS, organism = config['org'], project = config['project'], mapper = config['mapper']),              # homer make UCSC
+        expand('{project}/{organism}/{mapper}/homer/Peaks/{sample}.regions.txt', sample = IDS, organism = config['org'], project = config['project'], mapper = config['mapper']),        # homer find Peaks
+ #       expand('{project}/{organism}/{mapper}/homer/Peaks/{sample}.annotatedRegions.txt', sample = IDS, organism = config['org'], project = config['project'], mapper = config['mapper']),  # homer peak annotations
+## SEACR tool
+        expand('{project}/{organism}/{mapper}/seacr/{sample}.bedgraph', sample = IDS, organism = config['org'], project = config['project'], mapper = config['mapper']),        # SEACR - prepare the files
+        expand('{project}/{organism}/{mapper}/seacr/{pattern}.auc.threshold.bed', pattern = PATTERN, sample = IDS, organism = config['org'], project = config['project'], mapper = config['mapper']),        # SEACR - run the peak calling 
+
+rule seacr_run:
+	input:
+		IP = '{project}/{organism}/{mapper}/seacr/IP_{PATTERN}.bedgraph',
+		IgG = '{project}/{organism}/{mapper}/seacr/IgG_{PATTERN}.bedgraph',
+	output:
+		bed1 = '{project}/{organism}/{mapper}/seacr/{PATTERN}.auc.threshold.bed',
+		bed2 = '{project}/{organism}/{mapper}/seacr/{PATTERN}.norm.stringent.bed'
+	params:
+		stringent = 'stringent_',
+		relaxed = 'relaxed_',
+		AUC =  'Top1_',
+	shell:
+		'''
+		bash /fs/home/yeroslaviz/SEACR/SEACR_1.3.sh {input.IP} 0.01 non stringent {output.bed1}
+		bash /fs/home/yeroslaviz/SEACR/SEACR_1.3.sh {input.IP} {input.IgG} norm stringent {output.bed2}
+		'''
+
+#		bash ~/SEACR/SEACR_1.3.sh {input.IP} {Input.IgG} norm stringent {params.stringent}{output.bed}
+#		bash ~/SEACR/SEACR_1.3.sh {input.IP} {Input.IgG} non relaxed {params.relaxed}{output.bed}
+
+
+rule seacr_prepare:
+	input:
+		bam = '{project}/{organism}/{mapper}/{IDS}.sorted.bam'		
+	output:
+		bed      = '{project}/{organism}/{mapper}/seacr/{IDS}.bed',
+		bedgraph = '{project}/{organism}/{mapper}/seacr/{IDS}.bedgraph'
+	params:
+		sortByNames = temp('{project}/{organism}/{mapper}/{IDS}.sortedByName.bam'),
+		clean = '{project}/{organism}/{mapper}/seacr/{IDS}.clean.bed',
+ 		frag  = temp('{project}/{organism}/{mapper}/seacr/{IDS}.frag.bed'),
+		size  = '/fs/pool/pool-bcfngs/genomes/{organism}.chromSize',
+	shell:
+		'''
+		samtools sort -@ {config[threads]} -n {input.bam} -o {params.sortByNames}
+		bedtools bamtobed -bedpe -i {params.sortByNames} > {output.bed}
+		awk "\$1==\$4 && \$6-\$2 < 1000 {{print \$0}}" {output.bed} > {params.clean}
+		cut -f 1,2,6 {params.clean} | sort -V -k1,1 -k2,2n -k3,3n > {params.frag}
+		bedtools genomecov -bg -i {params.frag} -g {params.size} > {output.bedgraph}
+		'''
+
+rule homer_annotatePeaks:
+	input:
+		peaks = '{project}/{organism}/{mapper}/homer/Peaks/{IDS}.regions.txt'
+	output:
+		file  = '{project}/{organism}/{mapper}/homer/Peaks/{IDS}.annotatedRegions.txt'
+	params:
+		fa  = '/fs/pool/pool-bcfngs/genomes/{organism}.fa',
+		gtf = '/fs/pool/pool-bcfngs/genomes/{organism}.gtf'
+	shell:
+		'annotatePeaks.pl {input.peaks} -gtf {params.gtf} {params.fa} > {output.file}'
+
+rule homer_findPeaks:
+	input:
+		dir = '{project}/{organism}/{mapper}/homer/Tags/{IDS}'		
+	output:
+		out = '{project}/{organism}/{mapper}/homer/Peaks/{IDS}.regions.txt'
+	params:
+		dir  = '{project}/{organism}/{mapper}/homer/Tags/IgG_',
+		ctrl = PATTERN
+	shell:
+		'findPeaks {input.dir} -o {output.out} -style histone'
+
+rule homer_makeUCSC:
+	input:
+		dir = '{project}/{organism}/{mapper}/homer/Tags/{IDS}'
+	output:
+		out = '{project}/{organism}/{mapper}/homer/Tags/{IDS}.bigwig'
+	params:
+		size = '/fs/pool/pool-bcfngs/genomes/{organism}.chromSize',
+		name = '{IDS}'
+	shell:
+		'''
+		makeUCSCfile {input.dir} -bigWig {params.size} -fsize 1e20 -o {output.out} >  {params.name}_trackInfo.txt
+		'''
+
+
+rule homer_makeTag:
+	input:
+		bam = '{project}/{organism}/{mapper}/{IDS}.sorted.bam'
+	output:
+		tag= directory('{project}/{organism}/{mapper}/homer/Tags/{IDS}')
+	params:
+	shell:
+		'makeTagDirectory {output.tag} -unique  {input.bam}'
+# -unique : selecting this option will cause HOMER to only keep uniquely alignable reads
+
+rule bdg_2_bw:
+	input:
+		ctrl = '{project}/{organism}/{mapper}/macs2/{PATTERN}_control_lambda.bdg',
+		chip = '{project}/{organism}/{mapper}/macs2/{PATTERN}_treat_pileup.bdg'
+	output:
+		ctrlBW = '{project}/{organism}/{mapper}/macs2/{PATTERN}_control_lambda.bw',
+		chipBW = '{project}/{organism}/{mapper}/macs2/{PATTERN}_treat_pileup.bw'
+	params:
+		size = '/fs/pool/pool-bcfngs/genomes/{organism}.chromSize'
+	shell:
+		'''
+		bedGraphToBigWig {input.ctrl} {params.size} {output.ctrlBW}
+		bedGraphToBigWig {input.chip} {params.size} {output.chipBW}
+		'''
+
+rule macs2_bdgCompare:
+	input:
+		In = '{project}/{organism}/{mapper}/bamCoverage/IgG_{pattern}.rmdup.bdg',
+		chip = '{project}/{organism}/{mapper}/bamCoverage/IP_{pattern}.rmdup.bdg'
+	output:
+		bdg= directory('{project}/{organism}/{mapper}/macs2/{pattern}.compared.bdg')
+	params:
+		name = '{pattern}.bdg'
+	shell:
+		'macs2 bdgcmp -t {input.chip} -c {input.In} -o {params.name} --outdir {output.bdg} -m FE'
+
+rule macs2_peakCalling:
+	input:
+		In = '{project}/{organism}/{mapper}/IgG_{PATTERN}.rmdup.bam',
+		chip = '{project}/{organism}/{mapper}/IP_{PATTERN}.rmdup.bam'
+	output:
+		Npeaks = '{project}/{organism}/{mapper}/macs2/{PATTERN}_peaks.narrowPeak',
+		Bpeaks = '{project}/{organism}/{mapper}/macs2/{PATTERN}_peaks.broadPeak',
+		control_bdg = '{project}/{organism}/{mapper}/macs2/{PATTERN}_control_lambda.bdg',
+		chip_bdg = '{project}/{organism}/{mapper}/macs2/{PATTERN}_treat_pileup.bdg'
+	params:
+		outdir = '{project}/{organism}/{mapper}/macs2/',
+		name = '{PATTERN}'
+	shell:
+		'''
+		macs2 callpeak -t {input.chip} -c {input.In} -f BAMPE -g mm -n {params.name} -B -p 1e-5 --outdir {params.outdir}
+		macs2 callpeak -t {input.chip} -c {input.In} -f BAMPE -g mm -n {params.name} --broad -B -p 1e-5 --outdir {params.outdir}
+		'''
+
+# first run used -q 0.05 -f BAM (even though the files were paire-dend
+# second uses -p 1e-5 -f BAMPE
+
+rule convert_2bedgraph:
+	input:
+		bam1  = '{project}/{organism}/{mapper}/{IDS}.rmdup.bam',
+		index1= '{project}/{organism}/{mapper}/{IDS}.rmdup.bam.bai',
+		bam2  = '{project}/{organism}/{mapper}/{IDS}.sorted.bam',
+		index2= '{project}/{organism}/{mapper}/{IDS}.sorted.bam.bai',
+	output:
+		bdg1 = '{project}/{organism}/{mapper}/bamCoverage/{IDS}.rmdup.bdg',
+		bdg2 = '{project}/{organism}/{mapper}/bamCoverage/{IDS}.sorted.bdg',
+	params:
+	   genomeSize = config['effGenomeSize']
+	shell:
+		'''
+		bamCoverage --bam {input.bam1} --outFileName {output.bdg1} --outFileFormat bedgraph --binSize 10 --effectiveGenomeSize {params.genomeSize} --extendReads 160 --normalizeUsing CPM --ignoreForNormalization chrX chrM
+		bamCoverage --bam {input.bam2} --outFileName {output.bdg2} --outFileFormat bedgraph --binSize 10 --effectiveGenomeSize {params.genomeSize} --extendReads 160 --normalizeUsing CPM --ignoreForNormalization chrX chrM
+		'''
+
+rule bam_index:
+	input:
+		rmdup ='{project}/{organism}/{mapper}/{IDS}.rmdup.bam',
+		sorted ='{project}/{organism}/{mapper}/{IDS}.sorted.bam',
+	output:
+		rmdup ='{project}/{organism}/{mapper}/{IDS}.rmdup.bam.bai',
+		sorted ='{project}/{organism}/{mapper}/{IDS}.sorted.bam.bai',
+	shell:
+		'''
+		samtools index {input.rmdup}
+		samtools index {input.sorted}
+		'''
+
+rule samtools_flagstat:
+	input  : 
+		rmdup  = '{project}/{organism}/{mapper}/{IDS}.rmdup.bam',
+		sorted = '{project}/{organism}/{mapper}/{IDS}.sorted.bam'
+	output:
+		rmdup  = '{project}/{organism}/{mapper}/{IDS}.rmdup.bam.flagstat',
+		sorted = '{project}/{organism}/{mapper}/{IDS}.sorted.bam.flagstat'
+	params:
+		name = '{IDS}',	
+		dir = '{project}/{organism}/{mapper}/'
+	shell:
+		'''
+		samtools flagstat {input.rmdup} > {output.rmdup}
+		samtools flagstat {input.sorted} > {output.sorted}
+		samtools idxstats {input.rmdup} > {params.dir}{params.name}.rmdup.readsPerChromosome.txt
+		samtools idxstats {input.sorted} > {params.dir}{params.name}.sorted.readsPerChromosome.txt
+		'''
+#	wrapper:
+#		'0.49.0/bio/samtools/flagstat'
+
+rule remove_duplicates:
+	input:
+		bam = '{project}/{organism}/{mapper}/{IDS}.sorted.bam'
+	output:
+		bam = '{project}/{organism}/{mapper}/{IDS}.rmdup.bam'
+	params:
+		stat = '{project}/{organism}/{mapper}/{IDS}_rmdup_metric.txt'
+	shell:
+		'picard MarkDuplicates I={input.bam} O={output.bam} M={params.stat} REMOVE_DUPLICATES=true'
+
+rule bowtie2_Mapping:
+    input:
+        R1='{IDS}.conc.R1.fastq.gz',
+        R2='{IDS}.conc.R2.fastq.gz',
+    output:
+        bam='{project}/{organism}/bowtie2/{IDS}.sorted.bam',
+    log:
+        '{project}/{organism}/bowtie2/{IDS}.log'
+    params:
+        prefix ='{project}/{organism}/star/{IDS}',
+        index=expand('/fs/pool/pool-bcfngs/genomes/{organism}/bowtie2Index/{organism}', organism = config['org'])
+    shell:
+        'bowtie2 --threads {config[threads]} --local --very-sensitive-local --no-unal --no-mixed --no-discordant -I 10 -X 700 '
+        '-x {params.index} -1 {input.R1} -2 {input.R2} 2> {log} '
+        '| samtools view -Sbhu -q 7 -@8 - | samtools sort -@8 - -o {output.bam}'
+
+# First run was done with --dovetail --very-sensitive-local --no-unal --no-mixed --no-discordant -X 2000 (paper -  CoBATCH for High-Throughput Single-Cell Epigenomic Profiling)
+# second run - --local --very-sensitive-local --no-unal --no-mixed --no-discordant -I 10 -X 700 (paper SEACER - https://www.biorxiv.org/content/10.1101/569129v1)
+
+rule bwa_Mapping: 
+    input:
+        R1='{IDS}.conc.R1.fastq.gz',
+        R2='{IDS}.conc.R2.fastq.gz',
+    output:
+        bam='{project}/{organism}/bwa/{IDS}.sorted.bam',
+    params:
+        prefix ='{project}/{organism}/star/{IDS}',
+        index=expand('/fs/pool/pool-bcfngs/genomes/{organism}/bwaIndex/{organism}', organism = config['org'])
+    shell:
+        'bwa mem -t {config[threads]} -M {params.index} {input.R1} {input.R2}'
+        '| samtools view -Sbhu -q 7 -@8 - | samtools sort -@8 - -o {output.bam}'
+
+
+rule segemehl_mapping:
+	input:
+		R1='{IDS}.conc.R1.fastq.gz',
+		R2='{IDS}.conc.R2.fastq.gz',
+	output:
+		sam   ='{project}/{organism}/segemehl/{IDS}.sam',
+		bam='{project}/{organism}/segemehl/{IDS}.sorted.bam',
+	params:
+		ref =expand('/fs/pool/pool-bcfngs/genomes/{organism}.fa', organism = config['org']),
+		index=expand('/fs/pool/pool-bcfngs/genomes/{organism}/segemehlIndex/{organism}.idx', organism = config['org']),
+		name = '{IDS}'
+	shell:
+		'''
+		mkdir -p {project}/{organism}/segemehl/
+		segemehl.x -i  {params.index} -d {params.ref} -S -t {config[threads]} -q {input.R1} -p {input.R2} > {output.sam}
+		samtools view -Sbhu -q 7 -@8 {output.sam} | samtools sort -@8 - -o {output.bam}
+		rm {params.name}.R1.fastq {params.name}.R2.fastq {output.sam}
+		'''
+
+#		
+
